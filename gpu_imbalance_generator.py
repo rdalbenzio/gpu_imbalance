@@ -67,7 +67,7 @@ def generate_prompt(word_count: int) -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count (roughly 0.75 tokens per word for English)."""
+    """Estimate token count (roughly 1.3 tokens per word for English)."""
     return int(len(text.split()) * 1.3)
 
 
@@ -112,6 +112,7 @@ class GPULoadBalancer:
 async def send_prompt(
     endpoint: str,
     prompt: str,
+    model: str,
     stats: Stats,
     balancer: GPULoadBalancer,
     gpu_id: int,
@@ -126,7 +127,7 @@ async def send_prompt(
 
         try:
             payload = {
-                "model": "default",
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 100
             }
@@ -158,6 +159,7 @@ async def send_prompt(
 
 async def run_generator(
     endpoint: str,
+    model: str,
     num_gpus: int,
     duration: int,
     max_concurrency: int,
@@ -176,16 +178,29 @@ async def run_generator(
     loop_count = 0
     tasks = []
 
-    print(f"Starting GPU imbalance generator...")
-    print(f"  Endpoint: {endpoint}")
-    print(f"  GPUs: {num_gpus}")
-    print(f"  Duration: {duration}s")
-    print(f"  Max concurrency: {max_concurrency}")
-    print(f"  Max prompt words: {max_prompt}")
-    print(f"  Warmup loops: {warmup_loops}")
-    print(f"  Exponential base: {exp_base}")
-    print(f"  Metrics endpoint: {metrics_endpoint or 'None (using local tracking)'}")
     print()
+    print("=" * 60)
+    print("GPU IMBALANCE GENERATOR")
+    print("=" * 60)
+    print(f"  Endpoint:         {endpoint}")
+    print(f"  Model:            {model}")
+    print(f"  GPUs:             {num_gpus}")
+    print(f"  Duration:         {duration}s")
+    print(f"  Max concurrency:  {max_concurrency}")
+    print(f"  Max prompt words: {max_prompt}")
+    print(f"  Warmup loops:     {warmup_loops}")
+    print(f"  Exponential base: {exp_base}")
+    print(f"  Metrics endpoint: {metrics_endpoint or 'None (local tracking)'}")
+    print(f"  Prompts file:     {prompts_file}")
+    print()
+    print("  Prompt sizes per GPU (warmup phase):")
+    for i in range(num_gpus):
+        exponent = num_gpus - i
+        size = min(exp_base ** exponent, max_prompt)
+        print(f"    GPU{i}: {size} words")
+    print("=" * 60)
+    print()
+
     with open(prompts_file, 'w') as f:
         while time.time() - start_time < duration:
             gpu_id = balancer.get_next_gpu()
@@ -205,7 +220,7 @@ async def run_generator(
             f.flush()
 
             task = asyncio.create_task(
-                send_prompt(endpoint, prompt, stats, balancer, gpu_id, semaphore)
+                send_prompt(endpoint, prompt, model, stats, balancer, gpu_id, semaphore)
             )
             tasks.append(task)
 
@@ -239,6 +254,12 @@ def main():
         type=str,
         default="http://localhost:8000/v1/chat/completions",
         help="LLM API endpoint (default: http://localhost:8000/v1/chat/completions)"
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="default",
+        help="Model name to use in API requests (default: default)"
     )
     parser.add_argument(
         "--num-gpus", "-n",
@@ -310,6 +331,7 @@ def main():
 
     asyncio.run(run_generator(
         endpoint=args.endpoint,
+        model=args.model,
         num_gpus=args.num_gpus,
         duration=args.duration,
         max_concurrency=args.max_concurrency,

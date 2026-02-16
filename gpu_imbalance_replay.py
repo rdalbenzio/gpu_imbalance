@@ -56,6 +56,7 @@ def load_prompts(prompts_file: str) -> List[str]:
 async def send_prompt(
     endpoint: str,
     prompt: str,
+    model: str,
     stats: Stats,
     semaphore: asyncio.Semaphore
 ) -> Optional[dict]:
@@ -67,7 +68,7 @@ async def send_prompt(
 
         try:
             payload = {
-                "model": "default",
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 100
             }
@@ -97,6 +98,7 @@ async def send_prompt(
 
 async def run_replay(
     endpoint: str,
+    model: str,
     max_concurrency: int,
     prompts_file: str,
     loop_prompts: bool
@@ -113,10 +115,17 @@ async def run_replay(
         print("Error: No prompts found in file")
         return
 
-    print(f"Starting GPU imbalance replay...")
-    print(f"  Endpoint: {endpoint}")
+    print()
+    print("=" * 60)
+    print("GPU IMBALANCE REPLAY")
+    print("=" * 60)
+    print(f"  Endpoint:        {endpoint}")
+    print(f"  Model:           {model}")
     print(f"  Max concurrency: {max_concurrency}")
-    print(f"  Loop prompts: {loop_prompts}")
+    print(f"  Prompts file:    {prompts_file}")
+    print(f"  Total prompts:   {len(prompts)}")
+    print(f"  Loop prompts:    {loop_prompts}")
+    print("=" * 60)
     print()
 
     tasks = []
@@ -126,7 +135,7 @@ async def run_replay(
         prompt = prompts[prompt_index]
 
         task = asyncio.create_task(
-            send_prompt(endpoint, prompt, stats, semaphore)
+            send_prompt(endpoint, prompt, model, stats, semaphore)
         )
         tasks.append(task)
 
@@ -164,6 +173,12 @@ def main():
         help="LLM API endpoint (default: http://localhost:8000/v1/chat/completions)"
     )
     parser.add_argument(
+        "--model",
+        type=str,
+        default="default",
+        help="Model name to use in API requests (default: default)"
+    )
+    parser.add_argument(
         "--max-concurrency",
         type=int,
         default=512,
@@ -185,6 +200,7 @@ def main():
 
     asyncio.run(run_replay(
         endpoint=args.endpoint,
+        model=args.model,
         max_concurrency=args.max_concurrency,
         prompts_file=args.prompts_file,
         loop_prompts=args.loop
