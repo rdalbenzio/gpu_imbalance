@@ -13,6 +13,7 @@ import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+
 # Global word list
 WORD_LIST: List[str] = []
 
@@ -71,26 +72,41 @@ def estimate_tokens(text: str) -> int:
 
 
 class GPULoadBalancer:
-    """Simulates tracking of round-robin GPU selection and concurrency."""
+    """Tracks round-robin GPU selection and fetches concurrency from API."""
 
-    def __init__(self, num_gpus: int):
+    def __init__(self, num_gpus: int, metrics_endpoint: Optional[str] = None):
         self.num_gpus = num_gpus
         self.current_gpu = 0
-        self.concurrency = [0] * num_gpus
+        self.metrics_endpoint = metrics_endpoint
+        # Fallback local tracking when no metrics endpoint
+        self._local_concurrency = [0] * num_gpus
 
     def get_next_gpu(self) -> int:
         gpu = self.current_gpu
         self.current_gpu = (self.current_gpu + 1) % self.num_gpus
         return gpu
 
-    def get_concurrency(self, gpu_id: int) -> int:
-        return self.concurrency[gpu_id]
+    async def get_concurrency(self, gpu_id: int) -> int:
+        """Fetch concurrency from metrics API or use local tracking."""
+        if self.metrics_endpoint:
+            try:
+                url = f"{self.metrics_endpoint}?gpu_id={gpu_id}"
+                connector = aiohttp.TCPConnector(force_close=True)
+                async with aiohttp.ClientSession(connector=connector) as session:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            return data.get("concurrency", 0)
+            except Exception as e:
+                print(f"Warning: Failed to fetch metrics for GPU {gpu_id}: {e}")
+        # Fallback to local tracking
+        return self._local_concurrency[gpu_id]
 
     def increment_concurrency(self, gpu_id: int):
-        self.concurrency[gpu_id] += 1
+        self._local_concurrency[gpu_id] += 1
 
     def decrement_concurrency(self, gpu_id: int):
-        self.concurrency[gpu_id] = max(0, self.concurrency[gpu_id] - 1)
+        self._local_concurrency[gpu_id] = max(0, self._local_concurrency[gpu_id] - 1)
 
 
 async def send_prompt(
@@ -148,11 +164,12 @@ async def run_generator(
     max_prompt: int,
     warmup_loops: int,
     exp_base: int,
-    prompts_file: str
+    prompts_file: str,
+    metrics_endpoint: Optional[str]
 ):
     """Main loop for generating and sending prompts."""
     stats = Stats()
-    balancer = GPULoadBalancer(num_gpus)
+    balancer = GPULoadBalancer(num_gpus, metrics_endpoint)
     semaphore = asyncio.Semaphore(max_concurrency)
 
     start_time = time.time()
@@ -167,6 +184,7 @@ async def run_generator(
     print(f"  Max prompt words: {max_prompt}")
     print(f"  Warmup loops: {warmup_loops}")
     print(f"  Exponential base: {exp_base}")
+    print(f"  Metrics endpoint: {metrics_endpoint or 'None (using local tracking)'}")
     print()
     with open(prompts_file, 'w') as f:
         while time.time() - start_time < duration:
@@ -179,7 +197,7 @@ async def run_generator(
                 word_count = min(exp_base ** exponent, max_prompt)
             else:
                 # After warmup: concurrency^2 words
-                concurrency = balancer.get_concurrency(gpu_id)
+                concurrency = await balancer.get_concurrency(gpu_id)
                 word_count = min(max((concurrency + 1) ** 2, 4), max_prompt)
 
             prompt = generate_prompt(word_count)
@@ -270,6 +288,14 @@ def main():
         default=2,
         help="Base for exponential prompt sizing in warmup phase (default: 2, minimum: 2)"
     )
+    parser.add_argument(
+        "--metrics-endpoint",
+        type=str,
+        default=None,
+        help="Metrics API endpoint for GPU concurrency (e.g., http://localhost:8000/metrics). "
+             "Expected format: GET /metrics?gpu_id=0 -> {\"concurrency\": 5}. "
+             "If not provided, uses local tracking."
+    )
 
     args = parser.parse_args()
 
@@ -290,7 +316,8 @@ def main():
         max_prompt=args.max_prompt,
         warmup_loops=args.warmup_loops,
         prompts_file=args.prompts_file,
-        exp_base=args.exp_base
+        exp_base=args.exp_base,
+        metrics_endpoint=args.metrics_endpoint
     ))
 
 
