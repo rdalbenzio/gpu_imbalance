@@ -54,13 +54,12 @@ def load_prompts(prompts_file: str) -> List[str]:
 
 
 async def send_prompt(
-    session: aiohttp.ClientSession,
     endpoint: str,
     prompt: str,
     stats: Stats,
     semaphore: asyncio.Semaphore
 ) -> Optional[dict]:
-    """Send a prompt to the LLM endpoint."""
+    """Send a prompt to the LLM endpoint with a new connection."""
     async with semaphore:
         stats.prompts_sent += 1
         tokens_sent = estimate_tokens(prompt)
@@ -73,21 +72,23 @@ async def send_prompt(
                 "max_tokens": 100
             }
 
-            async with session.post(
-                endpoint,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=300)
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    stats.prompts_received += 1
-                    # Extract tokens from response
-                    if "usage" in result:
-                        stats.tokens_received += result["usage"].get("completion_tokens", 0)
-                    return result
-                else:
-                    stats.prompts_failed += 1
-                    return None
+            connector = aiohttp.TCPConnector(force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.post(
+                    endpoint,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=300)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        stats.prompts_received += 1
+                        # Extract tokens from response
+                        if "usage" in result:
+                            stats.tokens_received += result["usage"].get("completion_tokens", 0)
+                        return result
+                    else:
+                        stats.prompts_failed += 1
+                        return None
         except Exception as e:
             stats.prompts_failed += 1
             print(f"Request failed: {e}")
@@ -121,34 +122,33 @@ async def run_replay(
     tasks = []
     prompt_index = 0
 
-    async with aiohttp.ClientSession() as session:
-        while prompt_index < len(prompts):
-            prompt = prompts[prompt_index]
+    while prompt_index < len(prompts):
+        prompt = prompts[prompt_index]
 
-            task = asyncio.create_task(
-                send_prompt(session, endpoint, prompt, stats, semaphore)
-            )
-            tasks.append(task)
+        task = asyncio.create_task(
+            send_prompt(endpoint, prompt, stats, semaphore)
+        )
+        tasks.append(task)
 
-            prompt_index += 1
+        prompt_index += 1
 
-            # Progress update every 100 prompts
-            if prompt_index % 100 == 0:
-                elapsed = time.time() - stats.start_time
-                print(f"Progress: {prompt_index}/{len(prompts)} prompts sent, {elapsed:.1f}s elapsed")
+        # Progress update every 100 prompts
+        if prompt_index % 100 == 0:
+            elapsed = time.time() - stats.start_time
+            print(f"Progress: {prompt_index}/{len(prompts)} prompts sent, {elapsed:.1f}s elapsed")
 
-            # Small delay to prevent overwhelming
-            await asyncio.sleep(0.01)
+        # Small delay to prevent overwhelming
+        await asyncio.sleep(0.01)
 
-            # If looping and reached end, reset index
-            if loop_prompts and prompt_index >= len(prompts):
-                prompt_index = 0
-                print("Looping back to start of prompts...")
+        # If looping and reached end, reset index
+        if loop_prompts and prompt_index >= len(prompts):
+            prompt_index = 0
+            print("Looping back to start of prompts...")
 
-        # Wait for remaining tasks
-        if tasks:
-            print("Waiting for remaining requests to complete...")
-            await asyncio.gather(*tasks, return_exceptions=True)
+    # Wait for remaining tasks
+    if tasks:
+        print("Waiting for remaining requests to complete...")
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     stats.print_table()
 

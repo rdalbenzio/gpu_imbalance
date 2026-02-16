@@ -94,7 +94,6 @@ class GPULoadBalancer:
 
 
 async def send_prompt(
-    session: aiohttp.ClientSession,
     endpoint: str,
     prompt: str,
     stats: Stats,
@@ -102,7 +101,7 @@ async def send_prompt(
     gpu_id: int,
     semaphore: asyncio.Semaphore
 ) -> Optional[dict]:
-    """Send a prompt to the LLM endpoint."""
+    """Send a prompt to the LLM endpoint with a new connection."""
     async with semaphore:
         balancer.increment_concurrency(gpu_id)
         stats.prompts_sent += 1
@@ -116,21 +115,23 @@ async def send_prompt(
                 "max_tokens": 100
             }
 
-            async with session.post(
-                endpoint,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=300)
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    stats.prompts_received += 1
-                    # Extract tokens from response
-                    if "usage" in result:
-                        stats.tokens_received += result["usage"].get("completion_tokens", 0)
-                    return result
-                else:
-                    stats.prompts_failed += 1
-                    return None
+            connector = aiohttp.TCPConnector(force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.post(
+                    endpoint,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=300)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        stats.prompts_received += 1
+                        # Extract tokens from response
+                        if "usage" in result:
+                            stats.tokens_received += result["usage"].get("completion_tokens", 0)
+                        return result
+                    else:
+                        stats.prompts_failed += 1
+                        return None
         except Exception as e:
             stats.prompts_failed += 1
             print(f"Request failed: {e}")
@@ -165,45 +166,43 @@ async def run_generator(
     print(f"  Max prompt words: {max_prompt}")
     print(f"  Warmup loops: {warmup_loops}")
     print()
+    with open(prompts_file, 'w') as f:
+        while time.time() - start_time < duration:
+            gpu_id = balancer.get_next_gpu()
 
-    async with aiohttp.ClientSession() as session:
-        with open(prompts_file, 'w') as f:
-            while time.time() - start_time < duration:
-                gpu_id = balancer.get_next_gpu()
+            if loop_count < warmup_loops * num_gpus:
+                # Initial phase: 2^n words for GPU0, 2^(n-1) for GPU1, etc.
+                gpu_index = loop_count % num_gpus
+                exponent = num_gpus - gpu_index
+                word_count = min(2 ** exponent, max_prompt)
+            else:
+                # After warmup: concurrency^2 words
+                concurrency = balancer.get_concurrency(gpu_id)
+                word_count = min(max((concurrency + 1) ** 2, 4), max_prompt)
 
-                if loop_count < warmup_loops * num_gpus:
-                    # Initial phase: 2^n words for GPU0, 2^(n-1) for GPU1, etc.
-                    gpu_index = loop_count % num_gpus
-                    exponent = num_gpus - gpu_index
-                    word_count = min(2 ** exponent, max_prompt)
-                else:
-                    # After warmup: concurrency^2 words
-                    concurrency = balancer.get_concurrency(gpu_id)
-                    word_count = min(max((concurrency + 1) ** 2, 4), max_prompt)
+            prompt = generate_prompt(word_count)
+            f.write(prompt + "\n")
+            f.flush()
 
-                prompt = generate_prompt(word_count)
-                f.write(prompt + "\n")
-                f.flush()
+            task = asyncio.create_task(
+                send_prompt(endpoint, prompt, stats, balancer, gpu_id, semaphore)
+            )
+            tasks.append(task)
 
-                task = asyncio.create_task(
-                    send_prompt(session, endpoint, prompt, stats, balancer, gpu_id, semaphore)
-                )
-                tasks.append(task)
+            loop_count += 1
 
-                loop_count += 1
+            # Small delay to prevent overwhelming
+            await asyncio.sleep(0.01)
 
-                # Small delay to prevent overwhelming
-                await asyncio.sleep(0.01)
+            # Progress update every 100 prompts
+            if loop_count % 100 == 0:
+                elapsed = time.time() - start_time
+                print(f"Progress: {loop_count} prompts sent, {elapsed:.1f}s elapsed")
 
-                # Progress update every 100 prompts
-                if loop_count % 100 == 0:
-                    elapsed = time.time() - start_time
-                    print(f"Progress: {loop_count} prompts sent, {elapsed:.1f}s elapsed")
-
-        # Wait for remaining tasks
-        if tasks:
-            print("Waiting for remaining requests to complete...")
-            await asyncio.gather(*tasks, return_exceptions=True)
+    # Wait for remaining tasks
+    if tasks:
+        print("Waiting for remaining requests to complete...")
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     stats.print_table()
     print(f"\nPrompts saved to: {prompts_file}")
