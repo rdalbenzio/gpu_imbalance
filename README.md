@@ -9,7 +9,7 @@ Tools to create and test GPU load imbalance when round-robin load balancing is u
 Generates prompts dynamically and sends them to an LLM endpoint while saving them to a file.
 
 **Algorithm:**
-- **Warmup phase (M loops):** Sends prompts with 2^n words for GPU0, 2^(n-1) for GPU1, down to 2^0 for GPUn
+- **Warmup phase (M loops):** Sends prompts with k^n words for GPU0, k^(n-1) for GPU1, down to k^1 for GPUn (k is configurable, default 2)
 - **Main phase:** Retrieves current GPU concurrency and sends prompts of length `concurrency²` (capped at `max_prompt`)
 
 ```bash
@@ -20,6 +20,7 @@ python gpu_imbalance_generator.py \
     --max-concurrency 512 \
     --max-prompt 65536 \
     --warmup-loops 10 \
+    --exp-base 2 \
     --prompts-file prompts.txt
 ```
 
@@ -47,6 +48,7 @@ python gpu_imbalance_replay.py \
 | `--max-concurrency` | 512 | Maximum concurrent requests |
 | `--max-prompt` | 65536 | Maximum prompt length in words |
 | `--warmup-loops`, `-m` | 10 | Loops before switching to concurrency-based sizing |
+| `--exp-base`, `-k` | 2 | Base for exponential prompt sizing in warmup phase (minimum: 2) |
 | `--prompts-file` | `prompts.txt` | Output file for generated prompts |
 
 ### Replay Options
@@ -89,7 +91,7 @@ pip install aiohttp
 
 The scripts simulate a round-robin load balancer by tracking which GPU would receive each request. The imbalance is created by:
 
-1. Initially sending exponentially different prompt sizes to each GPU
+1. Initially sending exponentially different prompt sizes to each GPU (e.g., with `--exp-base 3 --num-gpus 4`: GPU0=81, GPU1=27, GPU2=9, GPU3=3 words)
 2. Then adapting prompt size based on current GPU concurrency (more load = larger prompts)
 
 This creates a feedback loop where busy GPUs receive increasingly larger prompts, exacerbating the imbalance.
