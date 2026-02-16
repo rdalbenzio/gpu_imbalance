@@ -36,6 +36,26 @@ python gpu_imbalance_replay.py \
     --loop  # Optional: continuously loop through prompts
 ```
 
+### 3. Warmup-Only Script (`gpu_imbalance_warmup.py`)
+
+Simpler version that only generates exponentially sized prompts (k^n pattern) for the entire duration, without the concurrency-based scaling phase.
+
+```bash
+python gpu_imbalance_warmup.py \
+    --endpoint http://localhost:8000/v1/chat/completions \
+    --num-gpus 4 \
+    --duration 3600 \
+    --max-concurrency 512 \
+    --exp-base 3 \
+    --prompts-file prompts.txt
+```
+
+With `--exp-base 3 --num-gpus 4`, prompt sizes repeat in pattern:
+- GPU0: 81 words (3^4)
+- GPU1: 27 words (3^3)
+- GPU2: 9 words (3^2)
+- GPU3: 3 words (3^1)
+
 ## Options
 
 ### Generator Options
@@ -50,6 +70,7 @@ python gpu_imbalance_replay.py \
 | `--warmup-loops`, `-m` | 10 | Loops before switching to concurrency-based sizing |
 | `--exp-base`, `-k` | 2 | Base for exponential prompt sizing in warmup phase (minimum: 2) |
 | `--prompts-file` | `prompts.txt` | Output file for generated prompts |
+| `--metrics-endpoint` | None | API endpoint for real GPU concurrency (format: `GET /metrics?gpu_id=0` → `{"concurrency": 5}`) |
 
 ### Replay Options
 
@@ -60,9 +81,21 @@ python gpu_imbalance_replay.py \
 | `--prompts-file` | `prompts.txt` | Input file with prompts to replay |
 | `--loop` | false | Continuously loop through prompts |
 
+### Warmup-Only Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--endpoint` | `http://localhost:8000/v1/chat/completions` | LLM API endpoint |
+| `--num-gpus`, `-n` | 4 | Number of GPUs behind load balancer |
+| `--duration`, `-t` | 3600 | Test duration in seconds |
+| `--max-concurrency` | 512 | Maximum concurrent requests |
+| `--max-prompt` | 65536 | Maximum prompt length in words |
+| `--exp-base`, `-k` | 2 | Base for exponential prompt sizing (minimum: 2) |
+| `--prompts-file` | `prompts.txt` | Output file for generated prompts |
+
 ## Output
 
-Both scripts print a summary table at completion:
+All scripts print a summary table at completion:
 
 ```
 ============================================================
@@ -92,6 +125,6 @@ pip install aiohttp
 The scripts simulate a round-robin load balancer by tracking which GPU would receive each request. The imbalance is created by:
 
 1. Initially sending exponentially different prompt sizes to each GPU (e.g., with `--exp-base 3 --num-gpus 4`: GPU0=81, GPU1=27, GPU2=9, GPU3=3 words)
-2. Then adapting prompt size based on current GPU concurrency (more load = larger prompts)
+2. Then adapting prompt size based on current GPU concurrency (more load = larger prompts) - generator script only
 
 This creates a feedback loop where busy GPUs receive increasingly larger prompts, exacerbating the imbalance.
