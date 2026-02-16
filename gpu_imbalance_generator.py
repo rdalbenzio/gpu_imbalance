@@ -147,6 +147,7 @@ async def run_generator(
     max_concurrency: int,
     max_prompt: int,
     warmup_loops: int,
+    exp_base: int,
     prompts_file: str
 ):
     """Main loop for generating and sending prompts."""
@@ -165,16 +166,17 @@ async def run_generator(
     print(f"  Max concurrency: {max_concurrency}")
     print(f"  Max prompt words: {max_prompt}")
     print(f"  Warmup loops: {warmup_loops}")
+    print(f"  Exponential base: {exp_base}")
     print()
     with open(prompts_file, 'w') as f:
         while time.time() - start_time < duration:
             gpu_id = balancer.get_next_gpu()
 
             if loop_count < warmup_loops * num_gpus:
-                # Initial phase: 2^n words for GPU0, 2^(n-1) for GPU1, etc.
+                # Initial phase: k^n words for GPU0, k^(n-1) for GPU1, etc.
                 gpu_index = loop_count % num_gpus
                 exponent = num_gpus - gpu_index
-                word_count = min(2 ** exponent, max_prompt)
+                word_count = min(exp_base ** exponent, max_prompt)
             else:
                 # After warmup: concurrency^2 words
                 concurrency = balancer.get_concurrency(gpu_id)
@@ -262,8 +264,18 @@ def main():
         default="words.txt",
         help="File containing English words (default: words.txt)"
     )
+    parser.add_argument(
+        "--exp-base", "-k",
+        type=int,
+        default=2,
+        help="Base for exponential prompt sizing in warmup phase (default: 2, minimum: 2)"
+    )
 
     args = parser.parse_args()
+
+    # Validate exp_base
+    if args.exp_base < 2:
+        parser.error("--exp-base must be >= 2")
 
     # Load word list
     print(f"Loading word list from {args.words_file}...")
@@ -277,7 +289,8 @@ def main():
         max_concurrency=args.max_concurrency,
         max_prompt=args.max_prompt,
         warmup_loops=args.warmup_loops,
-        prompts_file=args.prompts_file
+        prompts_file=args.prompts_file,
+        exp_base=args.exp_base
     ))
 
 
