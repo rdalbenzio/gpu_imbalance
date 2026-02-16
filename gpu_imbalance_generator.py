@@ -182,7 +182,7 @@ async def run_generator(
                     word_count = min(max((concurrency + 1) ** 2, 4), max_prompt)
 
                 prompt = generate_prompt(word_count)
-                f.write(prompt + "\n---PROMPT_SEPARATOR---\n")
+                f.write(prompt + "\n")
                 f.flush()
 
                 task = asyncio.create_task(

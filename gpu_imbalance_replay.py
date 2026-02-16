@@ -49,10 +49,7 @@ def estimate_tokens(text: str) -> int:
 def load_prompts(prompts_file: str) -> List[str]:
     """Load prompts from the prompts.txt file."""
     with open(prompts_file, 'r') as f:
-        content = f.read()
-
-    prompts = content.split("---PROMPT_SEPARATOR---")
-    prompts = [p.strip() for p in prompts if p.strip()]
+        prompts = [line.strip() for line in f if line.strip()]
     return prompts
 
 
