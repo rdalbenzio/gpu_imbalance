@@ -42,6 +42,7 @@ Simpler version that only generates exponentially sized prompts (k^n pattern) fo
 
 ```bash
 python gpu_imbalance_warmup.py \
+    --max-prompt 65536 \
     --endpoint http://localhost:8000/v1/chat/completions \
     --num-gpus 4 \
     --duration 3600 \
