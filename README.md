@@ -15,6 +15,7 @@ Generates prompts dynamically and sends them to an LLM endpoint while saving the
 ```bash
 python gpu_imbalance_generator.py \
     --endpoint http://localhost:8000/v1/chat/completions \
+    --model llama-3-70b \
     --num-gpus 4 \
     --duration 3600 \
     --max-concurrency 512 \
@@ -31,6 +32,7 @@ Replays prompts from a previously generated `prompts.txt` file.
 ```bash
 python gpu_imbalance_replay.py \
     --endpoint http://localhost:8000/v1/chat/completions \
+    --model llama-3-70b \
     --max-concurrency 512 \
     --prompts-file prompts.txt \
     --loop  # Optional: continuously loop through prompts
@@ -42,11 +44,12 @@ Simpler version that only generates exponentially sized prompts (k^n pattern) fo
 
 ```bash
 python gpu_imbalance_warmup.py \
-    --max-prompt 65536 \
     --endpoint http://localhost:8000/v1/chat/completions \
+    --model llama-3-70b \
     --num-gpus 4 \
     --duration 3600 \
     --max-concurrency 512 \
+    --max-prompt 65536 \
     --exp-base 3 \
     --prompts-file prompts.txt
 ```
@@ -64,6 +67,7 @@ With `--exp-base 3 --num-gpus 4`, prompt sizes repeat in pattern:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--endpoint` | `http://localhost:8000/v1/chat/completions` | LLM API endpoint |
+| `--model` | `default` | Model name to use in API requests |
 | `--num-gpus`, `-n` | 4 | Number of GPUs behind load balancer |
 | `--duration`, `-t` | 3600 | Test duration in seconds |
 | `--max-concurrency` | 512 | Maximum concurrent requests |
@@ -78,6 +82,7 @@ With `--exp-base 3 --num-gpus 4`, prompt sizes repeat in pattern:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--endpoint` | `http://localhost:8000/v1/chat/completions` | LLM API endpoint |
+| `--model` | `default` | Model name to use in API requests |
 | `--max-concurrency` | 512 | Maximum concurrent requests |
 | `--prompts-file` | `prompts.txt` | Input file with prompts to replay |
 | `--loop` | false | Continuously loop through prompts |
@@ -87,6 +92,7 @@ With `--exp-base 3 --num-gpus 4`, prompt sizes repeat in pattern:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--endpoint` | `http://localhost:8000/v1/chat/completions` | LLM API endpoint |
+| `--model` | `default` | Model name to use in API requests |
 | `--num-gpus`, `-n` | 4 | Number of GPUs behind load balancer |
 | `--duration`, `-t` | 3600 | Test duration in seconds |
 | `--max-concurrency` | 512 | Maximum concurrent requests |
