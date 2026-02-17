@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-GPU Load Imbalancing Script - Warmup Only Mode
+GPU Load Imbalancing Script - Warmup Only Mode (Variable Exponent)
 Generates prompts with exponentially different sizes based on GPU index.
-Simpler version that only uses the warmup algorithm (k^n, k^(n-1), etc.)
+Periodically rebalances by shifting the exponential pattern to a random GPU.
 """
 
 import argparse
@@ -72,6 +72,18 @@ def estimate_tokens(text: str) -> int:
     return int(len(text.split()) * 1.3)
 
 
+def print_gpu_sizes(num_gpus: int, exp_base: int, max_prompt: int, offset: int):
+    """Print the prompt sizes for each GPU with current offset."""
+    print("  Prompt sizes per GPU:")
+    for i in range(num_gpus):
+        # Translate by offset: GPU at position (i - offset) % num_gpus gets exponent (num_gpus - i)
+        shifted_index = (i - offset) % num_gpus
+        exponent = num_gpus - shifted_index
+        size = min(exp_base ** exponent, max_prompt)
+        marker = " <-- max" if shifted_index == 0 else ""
+        print(f"    GPU{i}: {size} words{marker}")
+
+
 async def send_prompt(
     endpoint: str,
     prompt: str,
@@ -122,9 +134,10 @@ async def run_warmup(
     max_concurrency: int,
     max_prompt: int,
     exp_base: int,
-    prompts_file: str
+    prompts_file: str,
+    rebalance_time: int
 ):
-    """Main loop for generating exponentially sized prompts."""
+    """Main loop for generating exponentially sized prompts with periodic rebalancing."""
     stats = Stats()
     semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -133,9 +146,14 @@ async def run_warmup(
     tasks = []
     current_gpu = 0
 
+    # Offset determines which GPU gets the maximum prompt size (exp_base^n)
+    # offset=0 means GPU0 gets max, offset=k means GPUk gets max
+    gpu_offset = 0
+    last_rebalance_time = start_time
+
     print()
     print("=" * 60)
-    print("GPU IMBALANCE WARMUP-ONLY")
+    print("GPU IMBALANCE WARMUP-ONLY (VARIABLE EXPONENT)")
     print("=" * 60)
     print(f"  Endpoint:         {endpoint}")
     print(f"  Model:            {model}")
@@ -144,21 +162,31 @@ async def run_warmup(
     print(f"  Max concurrency:  {max_concurrency}")
     print(f"  Max prompt words: {max_prompt}")
     print(f"  Exponential base: {exp_base}")
+    print(f"  Rebalance time:   {rebalance_time}s")
     print(f"  Prompts file:     {prompts_file}")
     print()
-    print("  Prompt sizes per GPU:")
-    for i in range(num_gpus):
-        exponent = num_gpus - i
-        size = min(exp_base ** exponent, max_prompt)
-        print(f"    GPU{i}: {size} words")
+    print_gpu_sizes(num_gpus, exp_base, max_prompt, gpu_offset)
     print("=" * 60)
     print()
 
     with open(prompts_file, 'w') as f:
         while time.time() - start_time < duration:
-            # Calculate word count: k^n for GPU0, k^(n-1) for GPU1, etc.
-            gpu_index = current_gpu
-            exponent = num_gpus - gpu_index
+            current_time = time.time()
+
+            # Check if it's time to rebalance
+            if current_time - last_rebalance_time >= rebalance_time:
+                # Pick a random GPU to get the maximum prompt size
+                gpu_offset = random.randint(0, num_gpus - 1)
+                last_rebalance_time = current_time
+                elapsed = current_time - start_time
+                print(f"\n[{elapsed:.1f}s] Rebalancing: GPU{gpu_offset} now gets maximum prompts")
+                print_gpu_sizes(num_gpus, exp_base, max_prompt, gpu_offset)
+                print()
+
+            # Calculate word count with offset
+            # GPU at current_gpu position: shift by offset to determine exponent
+            shifted_index = (current_gpu - gpu_offset) % num_gpus
+            exponent = num_gpus - shifted_index
             word_count = min(exp_base ** exponent, max_prompt)
 
             prompt = generate_prompt(word_count)
@@ -195,7 +223,7 @@ def main():
     global WORD_LIST
 
     parser = argparse.ArgumentParser(
-        description="GPU Load Imbalancing Script - Warmup Only Mode"
+        description="GPU Load Imbalancing Script - Warmup Only Mode (Variable Exponent)"
     )
     parser.add_argument(
         "--endpoint",
@@ -240,6 +268,12 @@ def main():
         help="Base for exponential prompt sizing (default: 2, minimum: 2)"
     )
     parser.add_argument(
+        "--rebalance-time",
+        type=int,
+        default=300,
+        help="Time in seconds between rebalancing (default: 300)"
+    )
+    parser.add_argument(
         "--prompts-file",
         type=str,
         default="prompts.txt",
@@ -271,7 +305,8 @@ def main():
         max_concurrency=args.max_concurrency,
         max_prompt=args.max_prompt,
         exp_base=args.exp_base,
-        prompts_file=args.prompts_file
+        prompts_file=args.prompts_file,
+        rebalance_time=args.rebalance_time
     ))
 
 
